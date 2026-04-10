@@ -1,0 +1,241 @@
+
+<style>
+  h2.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+  .wrap{padding:1rem 0;font-size:13px;color:var(--color-text-primary)}
+  canvas{display:block;width:100%;border-radius:8px;border:0.5px solid var(--color-border-tertiary);background:var(--color-background-secondary)}
+  .ctrl{display:flex;gap:8px;margin:10px 0;align-items:center;flex-wrap:wrap}
+  button{font-size:12px;padding:5px 12px;border:0.5px solid var(--color-border-secondary);border-radius:6px;background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer}
+  button:hover{background:var(--color-background-secondary)}
+  button:disabled{opacity:.4;cursor:default}
+  .log{background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:8px;padding:10px 14px;height:110px;overflow-y:auto;font-size:12px;font-family:var(--font-mono);color:var(--color-text-secondary);line-height:1.7}
+  .log .hi{color:var(--color-text-success)}
+  .log .cur{color:var(--color-text-warning)}
+  .tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+  .tbl th{text-align:left;font-weight:500;color:var(--color-text-secondary);padding:4px 8px;border-bottom:0.5px solid var(--color-border-tertiary)}
+  .tbl td{padding:4px 8px;border-bottom:0.5px solid var(--color-border-tertiary)}
+  .tbl tr.active td{color:var(--color-text-warning);font-weight:500}
+  .tbl tr.done td{color:var(--color-text-success)}
+  .step-badge{display:inline-block;background:var(--color-background-info);color:var(--color-text-info);border-radius:20px;padding:2px 10px;font-size:11px;margin-left:6px}
+</style>
+<div class="wrap">
+  <h2 class="sr-only">Dijkstra algoritmoaren simulazio interaktiboa OSPF sarean</h2>
+
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <span style="font-size:14px;font-weight:500">OSPF — Dijkstra urratsez urrats</span>
+    <span class="step-badge" id="sbadge">0 / 0</span>
+  </div>
+
+  <canvas id="cv" height="300"></canvas>
+
+  <div class="ctrl">
+    <button id="btnReset" onclick="reset()">↺ Berrabiarazi</button>
+    <button id="btnStep" onclick="step()">Urrats bat ▶</button>
+    <button id="btnAuto" onclick="autoPlay()">Auto ▷</button>
+    <span style="color:var(--color-text-secondary);font-size:12px;margin-left:4px" id="stateLabel">Hasierako egoera · R1-etik abiatzen</span>
+  </div>
+
+  <div style="display:flex;gap:12px;margin-top:4px">
+    <div style="flex:1">
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:4px">Exekuzio-loga</div>
+      <div class="log" id="log"></div>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:4px">Distantzia-taula (SPF)</div>
+      <table class="tbl" id="dtbl">
+        <thead><tr><th>Nodo</th><th>Distantzia</th><th>Aurreko</th><th>Egoera</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--color-text-secondary)">
+    <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#1D9E75;margin-right:4px;vertical-align:middle"></span>Bisitatu</span>
+    <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#EF9F27;margin-right:4px;vertical-align:middle"></span>Unekoa</span>
+    <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#378ADD;margin-right:4px;vertical-align:middle"></span>Ilaran</span>
+    <span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#888780;margin-right:4px;vertical-align:middle"></span>Ezezaguna</span>
+  </div>
+</div>
+
+<script>
+const nodes = [
+  {id:'R1',x:120,y:150,label:'R1'},
+  {id:'R2',x:280,y:60,label:'R2'},
+  {id:'R3',x:280,y:240,label:'R3'},
+  {id:'R4',x:440,y:60,label:'R4'},
+  {id:'R5',x:440,y:150,label:'R5'},
+  {id:'R6',x:440,y:240,label:'R6'},
+  {id:'R7',x:580,y:150,label:'R7'},
+];
+const edges = [
+  {a:'R1',b:'R2',w:2},{a:'R1',b:'R3',w:5},
+  {a:'R2',b:'R4',w:3},{a:'R2',b:'R5',w:4},
+  {a:'R3',b:'R5',w:2},{a:'R3',b:'R6',w:6},
+  {a:'R4',b:'R7',w:1},{a:'R5',b:'R7',w:3},
+  {a:'R6',b:'R7',w:2},{a:'R5',b:'R6',w:1},
+];
+
+const INF = 9999;
+let dist={}, prev={}, visited=new Set(), queue=[], current=null, steps=[], stepIdx=0, autoTimer=null;
+
+function buildSteps(){
+  const d={},p={},vis=new Set(),q=[];
+  nodes.forEach(n=>{d[n.id]=INF;p[n.id]=null;});
+  d['R1']=0; q.push('R1');
+  const S=[];
+  S.push({type:'init',d:{...d},p:{...p},vis:new Set(vis),cur:null,q:[...q],msg:'Hasieratu: R1→0, gainerakoak ∞'});
+  while(q.length){
+    q.sort((a,b)=>d[a]-d[b]);
+    const u=q.shift();
+    if(vis.has(u))continue;
+    vis.add(u);
+    S.push({type:'visit',node:u,d:{...d},p:{...p},vis:new Set(vis),cur:u,q:[...q],
+      msg:`<span class="cur">${u}</span> bisitatu — dist=${d[u]}`});
+    const nbrs=edges.filter(e=>e.a===u||e.b===u);
+    for(const e of nbrs){
+      const v=e.a===u?e.b:e.a;
+      if(vis.has(v))continue;
+      const nd=d[u]+e.w;
+      if(nd<d[v]){
+        d[v]=nd; p[v]=u;
+        if(!q.includes(v))q.push(v);
+        S.push({type:'relax',node:v,d:{...d},p:{...p},vis:new Set(vis),cur:u,q:[...q],
+          msg:`  ${u}→${v}: distantzia ${nd} <span class="hi">eguneratu ✓</span> (aurrekoa: ${u})`});
+      } else {
+        S.push({type:'skip',node:v,d:{...d},p:{...p},vis:new Set(vis),cur:u,q:[...q],
+          msg:`  ${u}→${v}: ${nd} ≥ ${d[v]} (ez eguneratu)`});
+      }
+    }
+  }
+  S.push({type:'done',d:{...d},p:{...p},vis:new Set(vis),cur:null,q:[],
+    msg:`<span class="hi">✓ SPF osoa kalkulatuta!</span>`});
+  return S;
+}
+
+function applyStep(s){
+  dist={...s.d}; prev={...s.p}; visited=new Set(s.vis); current=s.cur; queue=[...s.q];
+}
+
+function reset(){
+  clearInterval(autoTimer); autoTimer=null;
+  steps=buildSteps(); stepIdx=0;
+  applyStep(steps[0]);
+  document.getElementById('log').innerHTML='';
+  document.getElementById('stateLabel').textContent='Hasierako egoera · R1-etik abiatzen';
+  document.getElementById('btnStep').disabled=false;
+  document.getElementById('sbadge').textContent=`0 / ${steps.length-1}`;
+  updateTable(); draw();
+}
+
+function step(){
+  if(stepIdx>=steps.length-1)return;
+  stepIdx++;
+  const s=steps[stepIdx];
+  applyStep(s);
+  const log=document.getElementById('log');
+  log.innerHTML+=`<div>${s.msg}</div>`;
+  log.scrollTop=log.scrollHeight;
+  document.getElementById('stateLabel').textContent=s.type==='done'?'Amaituta ✓':`Urratsa ${stepIdx}`;
+  document.getElementById('sbadge').textContent=`${stepIdx} / ${steps.length-1}`;
+  if(stepIdx>=steps.length-1)document.getElementById('btnStep').disabled=true;
+  updateTable(); draw();
+}
+
+function autoPlay(){
+  if(autoTimer){clearInterval(autoTimer);autoTimer=null;return;}
+  autoTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1){clearInterval(autoTimer);autoTimer=null;return;}
+    step();
+  },700);
+}
+
+function updateTable(){
+  const tb=document.querySelector('#dtbl tbody');
+  tb.innerHTML='';
+  nodes.forEach(n=>{
+    const tr=document.createElement('tr');
+    if(visited.has(n.id))tr.className='done';
+    else if(n.id===current)tr.className='active';
+    tr.innerHTML=`<td>${n.id}</td><td>${dist[n.id]===INF?'∞':dist[n.id]}</td><td>${prev[n.id]||'—'}</td><td>${visited.has(n.id)?'✓ Bisitatu':n.id===current?'▶ Unekoa':queue.includes(n.id)?'Ilaran':'—'}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function draw(){
+  const cv=document.getElementById('cv');
+  const W=cv.offsetWidth||640, H=300;
+  cv.width=W*devicePixelRatio; cv.height=H*devicePixelRatio;
+  cv.style.width=W+'px'; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d');
+  ctx.scale(devicePixelRatio,devicePixelRatio);
+
+  const dark=matchMedia('(prefers-color-scheme:dark)').matches;
+  const bg=dark?'#1e1e1e':'#f5f4f0';
+  const textCol=dark?'#c2c0b6':'#3d3d3a';
+  const edgeCol=dark?'#444441':'#b4b2a9';
+  const spfCol='#1D9E75';
+
+  ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+  const sx=W/680, sy=H/300;
+  const nx=n=>{const nd=nodes.find(x=>x.id===n);return nd.x*sx;};
+  const ny=n=>{const nd=nodes.find(x=>x.id===n);return nd.y*sy;};
+
+  // Draw SPF tree edges
+  nodes.forEach(n=>{
+    if(prev[n.id]&&visited.has(n.id)){
+      ctx.beginPath();
+      ctx.moveTo(nx(n.id),ny(n.id)); ctx.lineTo(nx(prev[n.id]),ny(prev[n.id]));
+      ctx.strokeStyle=spfCol; ctx.lineWidth=2.5; ctx.setLineDash([]);
+      ctx.stroke();
+    }
+  });
+
+  // Draw all edges
+  edges.forEach(e=>{
+    const ax=nx(e.a),ay=ny(e.a),bx=nx(e.b),by=ny(e.b);
+    const mx=(ax+bx)/2,my=(ay+by)/2;
+    const isActive=current&&(e.a===current||e.b===current);
+    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by);
+    ctx.strokeStyle=isActive?'#EF9F27':edgeCol;
+    ctx.lineWidth=isActive?1.5:0.8; ctx.setLineDash(isActive?[]:[4,3]);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle=isActive?'#EF9F27':edgeCol;
+    ctx.font=`${Math.round(10*Math.min(sx,sy))}px sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    const off=isActive?-10:-8;
+    const ang=Math.atan2(by-ay,bx-ax);
+    ctx.fillText(e.w, mx+Math.sin(ang)*off, my-Math.cos(ang)*off);
+  });
+
+  // Draw nodes
+  const R=18*Math.min(sx,sy);
+  nodes.forEach(n=>{
+    const x=nx(n.id), y=ny(n.id);
+    let fill, stroke, labelCol;
+    if(visited.has(n.id)){fill=spfCol;stroke='#085041';labelCol='#fff';}
+    else if(n.id===current){fill='#EF9F27';stroke='#854F0B';labelCol='#fff';}
+    else if(queue.includes(n.id)){fill='#378ADD';stroke='#185FA5';labelCol='#fff';}
+    else{fill=dark?'#444441':'#d3d1c7';stroke=dark?'#5f5e5a':'#888780';labelCol=textCol;}
+
+    ctx.beginPath(); ctx.arc(x,y,R,0,Math.PI*2);
+    ctx.fillStyle=fill; ctx.fill();
+    ctx.strokeStyle=stroke; ctx.lineWidth=1.5; ctx.stroke();
+
+    ctx.fillStyle=labelCol;
+    ctx.font=`500 ${Math.round(12*Math.min(sx,sy))}px sans-serif`;
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(n.label,x,y);
+
+    // Distance label
+    const d=dist[n.id];
+    if(d!==INF){
+      ctx.fillStyle=visited.has(n.id)?spfCol:n.id===current?'#BA7517':textCol;
+      ctx.font=`${Math.round(11*Math.min(sx,sy))}px sans-serif`;
+      ctx.fillText(d, x, y+R+10*Math.min(sx,sy));
+    }
+  });
+}
+
+reset();
+window.addEventListener('resize',draw);
+</script>
